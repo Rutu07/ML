@@ -1,0 +1,172 @@
+```{r}
+#install.packages("RMySQL")
+library(RMySQL)
+#
+mydb <- dbConnect(MySQL(), user = 'root', password = 'Sql@070397',
+                  dbname = 'pharmacy_scm', host = 'localhost', port=3306)
+#dbListTables(mydb)
+#dbListFields(mydb, 'Drug')
+```
+###Q1 20 Most sold drugs - To avoid problem of back orders
+```{r}
+
+rs1 <- dbSendQuery(mydb, "select Drugs_Purchased, SUM(Quantity) AS COUNT from customer_purchase
+group by Drugs_Purchased
+ORDER BY COUNT DESC;")
+#
+drugs_purchased_count <- dbFetch(rs1)
+#
+drugs_purchased_count
+library(dplyr)
+top_15_Items<-top_n(drugs_purchased_count,15)
+library(ggplot2)
+ggplot(top_15_Items, aes(as.factor(Drugs_Purchased),COUNT))+
+  geom_bar(stat = "identity", fill="steelblue")+
+  labs(y="Count of items sold", x="Name of Drugs")+
+  theme(axis.text.x = element_text(face = "bold", size =10,angle = 20))
+```
+
+
+dbClearResult(rs1)
+
+
+###Q2 Market Basket Analysis - Most frequently together purchased drugs
+```{r}
+
+rs2<- dbSendQuery(mydb,"select C_ID, Drugs_Purchased from customer_purchase;")
+frequently_purchased_together<-dbFetch(rs2)
+head(frequently_purchased_together)
+```
+
+
+# Convert the above dataset into market basket format i.e. transaction format to apply apriori algorithm
+```{r}
+library(arules)
+library(arulesViz)
+
+drug_purchaded_transactions<- list()
+for( i in unique(frequently_purchased_together$C_ID))
+{
+  drug_purchaded_transactions[[i]]<-unlist(frequently_purchased_together$Drugs_Purchased[frequently_purchased_together$C_ID==i])
+}
+
+# Data in transaction-rule format
+
+
+inspect(as(drug_purchaded_transactions, 'transactions' ))
+
+# Market Basket Analysis- Apriori Algorithm
+
+rules<-apriori(drug_purchaded_transactions, parameter = list(supp=0.001,conf=0.5))
+options(digits = 2)
+inspect(rules[1:10])
+rules<-sort(rules,by=c("confidence","count"), decreasing = TRUE)
+
+
+```
+
+```{r}
+
+# 10 Most Frequently together bought items
+# If items in LHS are bought, there are chances that items in RHS are also bought along with them
+inspect(rules[1:12])
+plot(rules[1:12], method="graph",measure = "count",engine = 'igraph' , shading = "confidence" )
+
+dbClearResult(rs2)
+```
+###Q3 Plotting number of medicines consumed based on Age and Gender of the customer
+```{r}
+
+rs3<-dbSendQuery(mydb,"select c.C_ID, c.C_Name, c.C_Age, c.C_Gender, c.C_Contact, c.C_City, c.C_Zipcode, cp.Drugs_Purchased
+from customer c, customer_purchase cp
+where c.C_ID=cp.C_ID;")
+
+customer_age_data<-dbFetch(rs3)
+dbClearResult(rs3)
+```
+
+# Subset drugs purchased by customers in the age group 1-50 and 50-80 and male Female Category
+```{r}
+
+customer_below_50_Female<-subset(customer_age_data$Drugs_Purchased,customer_age_data$C_Age<51 & customer_age_data$C_Gender=="Female")
+customer_below_50_Male<-subset(customer_age_data$Drugs_Purchased,customer_age_data$C_Age<51 & customer_age_data$C_Gender=="Male")
+
+```
+
+#Drugs purchased by both Men and Women under 50
+
+```{r}
+common_drugs_purchased_below_50<-intersect(customer_below_50_Female,customer_below_50_Male)
+customer_above_50_Female<-subset(customer_age_data$Drugs_Purchased,customer_age_data$C_Age>50 & customer_age_data$C_Gender=="Female")
+customer_above_50_Male<-subset(customer_age_data$Drugs_Purchased,customer_age_data$C_Age>50 & customer_age_data$C_Gender=="Male")
+
+
+
+category<-c('Below 50 Male','Below 50 Female', 'Above 50 Male', 'Above 50 Female')
+count_per_category<-c(length(customer_below_50_Male), length(customer_below_50_Female), length(customer_above_50_Male), length(customer_above_50_Female))
+
+visualise_customer_data<-data.frame(category,count_per_category)
+library(ggplot2)
+
+ggplot(visualise_customer_data, aes(x=category,y=count_per_category))+
+  geom_bar(stat = "identity", width = 0.50,fill="steelblue")+
+  theme_minimal()
+```
+
+
+
+#Drugs Purchased by women below 50
+#customer_below_50_Female
+
+###4 Display the details of pharmacies and drug distributors located in the same pin code : Enter the pincode
+```{r}
+
+rs4<-dbSendQuery(mydb,"select d.DD_ID, d.DD_Name, da.DD_Zipcode from  drug_distributor d, drug_distributor_address da
+where d.DD_Zipcode=da.DD_Zipcode;")
+drug_distributor_data<-dbFetch(rs4)
+dbClearResult(rs4)
+```
+
+#dim(drug_distributor_data)
+
+```{r}
+rs5<-dbSendQuery(mydb,"select p.Pharmacy_ID, pl.pharmacy_Name, pa.P_Zipcode from pharmacy p, pharmacy_license pl, pharmacy_address pa
+where p.P_License=pl.P_License and pa.P_Zipcode=p.P_Zipcode;")
+pharmacy_data<-dbFetch(rs5)
+dbClearResult(rs5)
+```
+
+
+
+#dim(pharmacy_data)
+```{r}
+#Enter pincode number to check the pharmacies and drug distributors in that pincode (94114, 96080 ,96003)
+pin_code=readline(prompt =  "Please enter pincode to find the drug distributors & pharmacies in that area- ") 
+```
+
+```{r}
+
+pharmacies<-subset(pharmacy_data, pharmacy_data$P_Zipcode==pin_code)
+drug_distributors<-subset(drug_distributor_data,drug_distributor_data$DD_Zipcode==pin_code)
+pharmacies
+drug_distributors
+```
+
+###5 Display the number of successful patents generated by drug manufacturers each year
+```{r}
+rs6<-dbSendQuery(mydb,"select Patent_year, count(*) as No_of_Patents
+from drug_manufacturer dm, patent p
+where dm.D_ID=p.D_ID and
+p.Patent_Status = 'Passed'
+group by p.Patent_year;")
+
+patent<-dbFetch(rs6)
+patent_data<-as.data.frame(patent)
+dbClearResult(rs6)
+
+ggplot(patent_data, aes(x=Patent_year,y=No_of_Patents))+
+  geom_bar(stat = "identity", width = 0.50,fill="steelblue")+
+  theme_minimal()
+
+dbDisconnect(mydb)
+```
